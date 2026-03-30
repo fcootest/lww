@@ -1,0 +1,1 @@
+const fs = require("fs"); const p = "C:/Users/Administrator/OneDrive/SEPO26/Legal/legal-workflow-fe/src/pages/TaskDetailPage.tsx"; const c = fs.readFileSync(p.replace("TaskDetailPage.tsx","_TDP_content.txt"),"utf8"); fs.writeFileSync(p, c, "utf8"); console.log("Written", fs.statSync(p).size);
