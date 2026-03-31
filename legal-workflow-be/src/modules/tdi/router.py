@@ -3,7 +3,7 @@
 import os
 from uuid import uuid4
 from fastapi import APIRouter, Depends, UploadFile, File, Form
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse
 from src.auth.dependencies import get_current_user
 from src.common.response import send_success, send_error
 from src.modules.tdi.model import TDI
@@ -141,23 +141,43 @@ async def upload_file(
 
 @router.get("/{tsi_id}/file/{filename}")
 async def serve_file(tsi_id: str, filename: str):
-    """Serve an uploaded file -- check GCS first, then local."""
+    """Serve an uploaded file -- stream from GCS directly (no signed URL needed)."""
+    import mimetypes
+    from fastapi.responses import StreamingResponse
+
+    # Determine content type from filename
+    content_type, _ = mimetypes.guess_type(filename)
+    content_type = content_type or "application/octet-stream"
+    # Force download disposition for office files
+    download_ext = {".pptx", ".docx", ".xlsx", ".pdf", ".csv"}
+    ext = os.path.splitext(filename)[1].lower()
+    disposition = "attachment" if ext in download_ext else "inline"
+
     client = _get_gcs_client()
     if client:
         try:
             bucket = client.bucket(GCS_BUCKET)
             blob = bucket.blob(f"{tsi_id}/{filename}")
             if blob.exists():
-                from datetime import timedelta
-                signed_url = blob.generate_signed_url(expiration=timedelta(minutes=60))
-                return RedirectResponse(url=signed_url)
-        except Exception:
-            pass
+                # Stream file content directly - no signed URL, no IAM signing required
+                file_bytes = blob.download_as_bytes()
+                import io
+                return StreamingResponse(
+                    io.BytesIO(file_bytes),
+                    media_type=content_type,
+                    headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+                )
+        except Exception as e:
+            print(f"[GCS] serve_file error: {e}")
 
-    # Fallback to local
+    # Fallback to local storage
     file_path = os.path.join(UPLOAD_DIR, tsi_id, filename)
     if os.path.exists(file_path):
-        return FileResponse(file_path)
+        return FileResponse(
+            file_path,
+            media_type=content_type,
+            headers={"Content-Disposition": f'{disposition}; filename="{filename}"'},
+        )
     return send_error(message="File not found", status_code=404)
 
 
