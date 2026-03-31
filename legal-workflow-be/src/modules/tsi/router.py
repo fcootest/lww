@@ -48,25 +48,31 @@ async def approve_task(tsi_id: str, user: dict = Depends(get_current_user)):
     if not tsi:
         return send_error(message="TSI not found", status_code=404)
 
-    # Check user is assigned
-    emp = emp_repository.get_by_code(user.get("emp_code", ""))
-    if not emp:
-        return send_error(message="Employee not found", status_code=400)
+    # Use emp_code from JWT directly (supports both EMP seed and BigQuery users)
+    emp_code = user.get("emp_code", "")
+    role_legal = user.get("role_legal", "")
+    empsec = user.get("empsec", "")
 
-    assignments = tri_repository.get_by_tsi(tsi_id)
-    assigned_emp_ids = [a.emp_id for a in assignments]
-    if emp.emp_id not in assigned_emp_ids:
-        return send_error(message="You are not assigned to this task", status_code=403)
+    # Determine admin from JWT claims (role_legal and empsec -- NOT emp table)
+    is_admin = (role_legal in ("Approver", "Checker")
+                or empsec == "SEC4"
+                or user.get("role") in ("LEGAL_MANAGER", "ADMIN"))
+
+    if not is_admin:
+        # For non-admin users: check assignment via TRI
+        assignments = tri_repository.get_by_tsi(tsi_id)
+        # Support both emp_id (seed) and emp_code (BigQuery) in TRI
+        assigned_ids = [a.emp_id for a in assignments]
+        emp = emp_repository.get_by_code(emp_code)
+        user_emp_id = emp.emp_id if emp else emp_code
+        if user_emp_id not in assigned_ids and emp_code not in assigned_ids:
+            return send_error(message="You are not assigned to this task", status_code=403)
 
     # Auto-transition PENDING -> IN_PROGRESS if needed
     current_status = tsi.status.value if hasattr(tsi.status, 'value') else tsi.status
     if current_status == 'PENDING':
         tsi_repository.update(tsi_id, {'status': 'IN_PROGRESS'})
         current_status = 'IN_PROGRESS'
-
-    # Determine if user is admin (Legal Manager) or regular user
-    # Admin = LEGAL_MANAGER role or ADMIN role with TiepTA code
-    is_admin = user.get("role") in ("LEGAL_MANAGER", "ADMIN")
 
     if is_admin:
         # Admin approve -> APPROVED, trigger next step
@@ -83,7 +89,7 @@ async def approve_task(tsi_id: str, user: dict = Depends(get_current_user)):
             tsev_id=f"TSEV-{uuid4().hex[:8]}",
             tsi_id=tsi_id,
             event_type=TSEVEventType.APPROVE,
-            emp_id=emp.emp_id,
+            emp_id=emp_code,
         )
         tsev_repository.create(tsev)
 
@@ -98,7 +104,7 @@ async def approve_task(tsi_id: str, user: dict = Depends(get_current_user)):
             tsev_id=f"TSEV-{uuid4().hex[:8]}",
             tsi_id=tsi_id,
             event_type=TSEVEventType.UPDATE,
-            emp_id=emp.emp_id,
+            emp_id=emp_code,
             event_data='{"action": "submit_to_review"}',
         )
         tsev_repository.create(tsev)
@@ -126,14 +132,21 @@ async def reject_task(tsi_id: str, req: RejectRequest, user: dict = Depends(get_
     if not tsi:
         return send_error(message="TSI not found", status_code=404)
 
-    emp = emp_repository.get_by_code(user.get("emp_code", ""))
-    if not emp:
-        return send_error(message="Employee not found", status_code=400)
+    # Use emp_code from JWT directly (supports both EMP seed and BigQuery users)
+    emp_code = user.get("emp_code", "")
+    role_legal = user.get("role_legal", "")
+    empsec = user.get("empsec", "")
+    is_admin = (role_legal in ("Approver", "Checker")
+                or empsec == "SEC4"
+                or user.get("role") in ("LEGAL_MANAGER", "ADMIN"))
 
-    assignments = tri_repository.get_by_tsi(tsi_id)
-    assigned_emp_ids = [a.emp_id for a in assignments]
-    if emp.emp_id not in assigned_emp_ids:
-        return send_error(message="You are not assigned to this task", status_code=403)
+    if not is_admin:
+        assignments = tri_repository.get_by_tsi(tsi_id)
+        assigned_ids = [a.emp_id for a in assignments]
+        emp = emp_repository.get_by_code(emp_code)
+        user_emp_id = emp.emp_id if emp else emp_code
+        if user_emp_id not in assigned_ids and emp_code not in assigned_ids:
+            return send_error(message="You are not assigned to this task", status_code=403)
 
     # Auto-transition PENDING -> IN_PROGRESS if needed
     current_status = tsi.status.value if hasattr(tsi.status, 'value') else tsi.status
@@ -152,7 +165,7 @@ async def reject_task(tsi_id: str, req: RejectRequest, user: dict = Depends(get_
         tsev_id=f"TSEV-{uuid4().hex[:8]}",
         tsi_id=tsi_id,
         event_type=TSEVEventType.REJECT,
-        emp_id=emp.emp_id,
+        emp_id=emp_code,
         event_data=json.dumps({"reason": req.reason}),
     )
     tsev_repository.create(tsev)

@@ -24,9 +24,11 @@ export function LoginPage() {
 
   const done = (d: any) => {
     const { token, user: u } = d
+    // Admin = SEC4 OR has Approver/Checker role_legal (can review and approve tasks)
+    const isAdminUser = u.empsec === 'SEC4' || u.role_legal === 'Approver' || u.role_legal === 'Checker'
     setAuth(token, {
       emp_code: u.emp_code, emp_name: u.emp_name,
-      role: u.empsec === 'SEC4' ? 'ADMIN' : 'PRODUCT_MANAGER',
+      role: isAdminUser ? 'ADMIN' : 'PRODUCT_MANAGER',
       empsec: u.empsec, pt_allowed: u.pt_allowed, cdt_allowed: u.cdt_allowed,
       krf_level: u.krf_level, cdt_1: u.cdt_1, role_legal: u.role_legal, google_email: u.google_email,
     })
