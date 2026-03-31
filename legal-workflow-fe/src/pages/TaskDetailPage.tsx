@@ -93,9 +93,37 @@ const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8100'
 
 function resolveFileUrl(url: string | undefined): string {
   if (!url) return ''
+  // GCS gs:// URIs are not browser-accessible; extract path and use API endpoint
+  if (url.startsWith('gs://')) {
+    const match = url.match(/^gs:\/\/[^/]+\/(.+)$/)
+    if (match) {
+      // path is tsi_id/filename
+      const parts = match[1].split('/')
+      if (parts.length >= 2) {
+        const tsiId = parts[0]
+        const filename = parts.slice(1).join('/')
+        return API_BASE + `/api/legal/task/${tsiId}/file/${filename}`
+      }
+    }
+    return ''
+  }
   if (url.startsWith('http')) return url
   if (url.startsWith('/api/')) return API_BASE + url
   return url
+}
+
+async function downloadFile(url: string, filename: string): Promise<void> {
+  try {
+    const res = await fetch(url)
+    const blob = await res.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = filename
+    a.click()
+    URL.revokeObjectURL(a.href)
+  } catch {
+    window.open(url, '_blank')
+  }
 }
 
 const ACCEPTED_FILE_TYPES = '.pdf,.docx,.xlsx,.pptx,.png,.jpg,.csv'
@@ -157,6 +185,7 @@ export function TaskDetailPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [lf240Meta, setLf240Meta] = useState<Record<string, string>>({})
   const [savingMeta, setSavingMeta] = useState(false)
+  const [isEditingMeta, setIsEditingMeta] = useState(false)
   const [assignableEmps, setAssignableEmps] = useState<{emp_code: string; emp_name: string}[]>([])
   const [reassigning, setReassigning] = useState(false)
 
@@ -188,8 +217,13 @@ export function TaskDetailPage() {
         const metaData = metaRes.data?.data
         if (metaData && typeof metaData === 'object') {
           setLf240Meta(metaData)
+          // Lock to read-only if any field has data
+          const hasData = Object.values(metaData).some((v: unknown) => v && String(v).trim())
+          setIsEditingMeta(!hasData)
+        } else {
+          setIsEditingMeta(true) // no metadata yet -> editable
         }
-      } catch { /* metadata might not exist yet */ }
+      } catch { setIsEditingMeta(true) /* no metadata yet */ }
       // Load assignable employees for reassignment
       try {
         const empRes = await api.get('/api/legal/emp/')
@@ -392,6 +426,7 @@ export function TaskDetailPage() {
     try {
       await api.put(`/api/legal/task/${id}/metadata`, lf240Meta)
       setActionMsg('Thông tin bổ sung đã lưu')
+      setIsEditingMeta(false) // Lock after save
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'response' in err) {
         const axErr = err as { response?: { data?: { message?: string } } }
@@ -616,48 +651,68 @@ export function TaskDetailPage() {
       {/* 5.5 LF240 Additional Fields */}
       {isLF240 && isInProgress && (
         <div data-testid="lf240-fields" className="bg-white rounded-lg shadow p-6">
-          <h3 className="text-lg font-semibold mb-4">Thông tin bổ sung — Hợp đồng đối tác</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="text-lg font-semibold">Thông tin bổ sung — Hợp đồng đối tác</h3>
+            {!isEditingMeta && (
+              <button className="px-3 py-1 border border-blue-600 text-blue-600 rounded text-sm hover:bg-blue-50"
+                onClick={() => setIsEditingMeta(true)}>
+                ✏️ Chỉnh sửa
+              </button>
+            )}
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">SĐT người đề xuất <span className="text-red-500">*</span></label>
-              <input type="tel" className="w-full border rounded px-3 py-2 text-sm" placeholder="+84-xxx-xxx-xxx"
-                value={lf240Meta.requester_phone || ''} onChange={(e) => setLf240Meta(prev => ({...prev, requester_phone: e.target.value}))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Email quản lý người đề xuất <span className="text-red-500">*</span></label>
-              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="manager@apero.vn"
-                value={lf240Meta.manager_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, manager_email: e.target.value}))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">SĐT đối tác</label>
-              <input type="tel" className="w-full border rounded px-3 py-2 text-sm" placeholder="+84-xxx-xxx-xxx"
-                value={lf240Meta.partner_phone || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_phone: e.target.value}))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mail liên hệ đối tác <span className="text-red-500">*</span></label>
-              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="contact@partner.com"
-                value={lf240Meta.partner_contact_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_contact_email: e.target.value}))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mail ký hợp đồng đối tác</label>
-              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="contract@partner.com"
-                value={lf240Meta.partner_contract_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_contract_email: e.target.value}))} />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mã PE <span className="text-red-500">*</span></label>
-              <input type="text" className="w-full border rounded px-3 py-2 text-sm" placeholder="PE-2026-001"
-                value={lf240Meta.pe_code || ''} onChange={(e) => setLf240Meta(prev => ({...prev, pe_code: e.target.value}))} />
-            </div>
+            {[
+              { key: 'requester_phone' as const, label: 'SĐT người đề xuất', type: 'tel', placeholder: '+84-xxx-xxx-xxx', required: true },
+              { key: 'manager_email' as const, label: 'Email quản lý người đề xuất', type: 'email', placeholder: 'manager@apero.vn', required: true },
+              { key: 'partner_phone' as const, label: 'SĐT đối tác', type: 'tel', placeholder: '+84-xxx-xxx-xxx', required: false },
+              { key: 'partner_contact_email' as const, label: 'Mail liên hệ đối tác', type: 'email', placeholder: 'contact@partner.com', required: true },
+              { key: 'partner_contract_email' as const, label: 'Mail ký hợp đồng đối tác', type: 'email', placeholder: 'contract@partner.com', required: false },
+              { key: 'pe_code' as const, label: 'Mã PE', type: 'text', placeholder: 'PE-2026-001', required: true },
+            ].map(f => (
+              <div key={f.key}>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  {f.label} {f.required && <span className="text-red-500">*</span>}
+                </label>
+                {isEditingMeta ? (
+                  <input type={f.type} className="w-full border rounded px-3 py-2 text-sm" placeholder={f.placeholder}
+                    value={lf240Meta[f.key] || ''}
+                    onChange={(e) => setLf240Meta(prev => ({...prev, [f.key]: e.target.value}))} />
+                ) : (
+                  <div className="border-b py-2 text-sm text-gray-800 min-h-[36px]">
+                    {lf240Meta[f.key] || <span className="text-gray-400 italic">Chưa nhập</span>}
+                  </div>
+                )}
+              </div>
+            ))}
             <div className="md:col-span-2">
-              <label className="block text-sm font-medium text-gray-700 mb-1">Mục đích ký kết / ban hành <span className="text-red-500">*</span></label>
-              <textarea className="w-full border rounded px-3 py-2 text-sm" rows={3} placeholder="Mô tả mục đích ký kết hợp đồng..."
-                value={lf240Meta.purpose || ''} onChange={(e) => setLf240Meta(prev => ({...prev, purpose: e.target.value}))} />
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Mục đích ký kết / ban hành <span className="text-red-500">*</span>
+              </label>
+              {isEditingMeta ? (
+                <textarea className="w-full border rounded px-3 py-2 text-sm" rows={3} placeholder="Mô tả mục đích ký kết hợp đồng..."
+                  value={lf240Meta.purpose || ''}
+                  onChange={(e) => setLf240Meta(prev => ({...prev, purpose: e.target.value}))} />
+              ) : (
+                <div className="border-b py-2 text-sm text-gray-800 min-h-[60px] whitespace-pre-wrap">
+                  {lf240Meta.purpose || <span className="text-gray-400 italic">Chưa nhập</span>}
+                </div>
+              )}
             </div>
           </div>
-          <button className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
-            disabled={savingMeta} onClick={handleSaveMeta}>
-            {savingMeta ? 'Đang lưu...' : 'Lưu thông tin bổ sung'}
-          </button>
+          {isEditingMeta && (
+            <div className="mt-4 flex gap-2">
+              <button className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
+                disabled={savingMeta} onClick={handleSaveMeta}>
+                {savingMeta ? 'Đang lưu...' : '💾 Lưu thông tin bổ sung'}
+              </button>
+              {Object.values(lf240Meta).some(v => v && v.trim()) && (
+                <button className="px-4 py-2 bg-gray-200 text-gray-700 rounded text-sm hover:bg-gray-300"
+                  onClick={() => setIsEditingMeta(false)}>
+                  Huỷ
+                </button>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -686,7 +741,7 @@ export function TaskDetailPage() {
                     {doc.file_url && (
                       <>
                         <a href={resolveFileUrl(doc.file_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs">View</a>
-                        <a href={resolveFileUrl(doc.file_url)} download className="text-green-600 hover:underline text-xs">Download</a>
+                        <button onClick={() => downloadFile(resolveFileUrl(doc.file_url), doc.file_name)} className="text-green-600 hover:underline text-xs">Download</button>
                       </>
                     )}
                     {!isAdmin && tsi?.status !== 'COMPLETED' && (

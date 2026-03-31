@@ -74,7 +74,7 @@ async def get_my_tasks(
 
     empsec = user.get("empsec", "")
     role_legal = user.get("role_legal", "")
-    is_admin = empsec == "SEC4" or role_legal == "Approver"
+    is_admin = empsec == "SEC4" or role_legal in ("Approver", "Checker")
 
     all_tsis = tsi_repository.get_all()
     seen_roots: dict[str, dict] = {}
@@ -88,32 +88,32 @@ async def get_my_tasks(
                 continue
             seen_roots[root_tsi.tsi_id] = entry
     else:
-        # Other SECs: show only tasks assigned via TRI
-        emp = emp_repository.get_by_code(user.get("emp_code", ""))
-        if not emp:
-            return send_error(message="Employee not found", status_code=400)
+        # Other SECs: show tasks where user is creator (requested_by) or assignee (assigned_to)
+        emp_code = user.get("emp_code", "")
+        # Also resolve emp_id for seed users (TRI compatibility)
+        emp = emp_repository.get_by_code(emp_code)
+        emp_id = emp.emp_id if emp else emp_code
 
-        tri_list = tri_repository.get_by_emp(emp.emp_id)
-        tsi_ids = [t.tsi_id for t in tri_list if t.tsi_id is not None]
+        # Collect matching root TSIs: created by user OR assigned to user
+        for tsi in all_tsis:
+            if tsi.my_parent_task is not None:
+                continue  # Skip non-root tasks
 
-        for tsi_id in tsi_ids:
-            tsi = tsi_repository.get_by_id(tsi_id)
-            if tsi is None:
+            requested_by = tsi.requested_by or ""
+            assigned_to = tsi.assigned_to or ""
+
+            is_mine = (
+                requested_by in (emp_code, emp_id)
+                or assigned_to in (emp_code, emp_id)
+            )
+            if not is_mine:
                 continue
 
-            # Walk up to L1 root
-            root_tsi = tsi
-            while root_tsi.my_parent_task:
-                parent = tsi_repository.get_by_id(root_tsi.my_parent_task)
-                if parent is None:
-                    break
-                root_tsi = parent
-
-            root_id = root_tsi.tsi_id
+            root_id = tsi.tsi_id
             if root_id in seen_roots:
                 continue
 
-            entry = _build_root_entry(root_tsi, all_tsis, emp_repository, tst_repository)
+            entry = _build_root_entry(tsi, all_tsis, emp_repository, tst_repository)
             if status and entry["status"] != status:
                 continue
             seen_roots[root_id] = entry

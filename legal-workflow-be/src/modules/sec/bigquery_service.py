@@ -21,12 +21,29 @@ class BigQueryPermissionService:
             raise RuntimeError(f"BigQuery client init failed: {e}")
 
     def get_by_email(self, email: str) -> Optional[SecPermission]:
+        # JOIN with fps_data.emp_list to get the correct id_number as emp_code
+        # v_auth_lookup.emp_code may be '#N/A' for some users; id_number is authoritative
         query = """
-            SELECT google_email, emp_code, emp_name, empgrade,
-                   empsec, pt_allowed, cdt_allowed, krf_level,
-                   cdt_1, cdt, role_legal
-            FROM `fp-a-project.sec_data.v_auth_lookup`
-            WHERE google_email = @email
+            SELECT
+                v.google_email,
+                COALESCE(
+                    NULLIF(e.id_number, '#N/A'),
+                    NULLIF(v.emp_code, '#N/A'),
+                    v.emp_code
+                ) AS emp_code,
+                v.emp_name,
+                v.empgrade,
+                v.empsec,
+                v.pt_allowed,
+                v.cdt_allowed,
+                v.krf_level,
+                v.cdt_1,
+                v.cdt,
+                v.role_legal
+            FROM `fp-a-project.sec_data.v_auth_lookup` v
+            LEFT JOIN `fp-a-project.fps_data.emp_list` e
+                ON v.emp_name = e.id_name
+            WHERE v.google_email = @email
             LIMIT 1
         """
         from google.cloud import bigquery

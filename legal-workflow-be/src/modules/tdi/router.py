@@ -100,7 +100,8 @@ async def upload_file(
     if STORAGE_BACKEND == "gcs":
         gcs_uri = _upload_to_gcs(tsi_id, content, stored_name)
         if gcs_uri:
-            file_url = gcs_uri
+            # Store as API path (not gs:// URI) so FE can generate a valid browser URL
+            file_url = f"/api/legal/task/{tsi_id}/file/{stored_name}"
             storage_type = "GCS"
 
     # Fallback to local
