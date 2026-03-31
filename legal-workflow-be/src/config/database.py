@@ -147,6 +147,7 @@ CREATE TABLE IF NOT EXISTS tsi (
     actual_completion_date TEXT,
     current_tst_level INTEGER,
     current_tst_id TEXT,
+    metadata TEXT,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );

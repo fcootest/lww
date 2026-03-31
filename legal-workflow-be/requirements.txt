@@ -6,6 +6,7 @@ pydantic-settings==2.7.1
 
 # BigQuery
 google-cloud-bigquery==3.14.1
+google-cloud-storage==2.18.2
 
 # Auth
 PyJWT==2.10.1

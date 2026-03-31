@@ -14,6 +14,7 @@ def _row_to_tsi(row) -> TSI:
         requested_by=row["requested_by"], assigned_to=row["assigned_to"],
         due_date=row["due_date"], actual_completion_date=row["actual_completion_date"],
         current_tst_level=row["current_tst_level"], current_tst_id=row["current_tst_id"],
+        metadata=row["metadata"] if "metadata" in row.keys() else None,
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
     )
@@ -29,16 +30,17 @@ def _tsi_to_params(tsi: TSI) -> dict:
         "requested_by": tsi.requested_by, "assigned_to": tsi.assigned_to,
         "due_date": tsi.due_date, "actual_completion_date": tsi.actual_completion_date,
         "current_tst_level": tsi.current_tst_level, "current_tst_id": tsi.current_tst_id,
+        "metadata": tsi.metadata,
         "created_at": tsi.created_at.isoformat(), "updated_at": tsi.updated_at.isoformat(),
     }
 
 
 _INS = """INSERT INTO tsi (tsi_id, tsi_code, tst_id, my_parent_task, title, description,
     status, priority, requested_by, assigned_to, due_date, actual_completion_date,
-    current_tst_level, current_tst_id, created_at, updated_at)
+    current_tst_level, current_tst_id, metadata, created_at, updated_at)
     VALUES (:tsi_id, :tsi_code, :tst_id, :my_parent_task, :title, :description,
             :status, :priority, :requested_by, :assigned_to, :due_date, :actual_completion_date,
-            :current_tst_level, :current_tst_id, :created_at, :updated_at)"""
+            :current_tst_level, :current_tst_id, :metadata, :created_at, :updated_at)"""
 
 
 class TSIRepository:
@@ -73,6 +75,7 @@ class TSIRepository:
             assigned_to=:assigned_to, due_date=:due_date,
             actual_completion_date=:actual_completion_date,
             current_tst_level=:current_tst_level, current_tst_id=:current_tst_id,
+            metadata=:metadata,
             updated_at=:updated_at WHERE tsi_id=:tsi_id""", p)
         db.commit()
         return updated

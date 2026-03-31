@@ -14,6 +14,7 @@ class TSEVEventType(str, Enum):
     COMMENT = "COMMENT"
     APPROVE = "APPROVE"
     REJECT = "REJECT"
+    REASSIGN = "REASSIGN"
 
 
 class TSEV(BaseModel):

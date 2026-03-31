@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import api from '../services/api'
 
@@ -11,12 +11,11 @@ const TST_L1_OPTIONS = [
 
 const PRIORITY_OPTIONS = ['LOW', 'MEDIUM', 'HIGH', 'URGENT']
 
-const FILTER_FIELDS: Record<string, { filter_type: string; label: string; placeholder: string }[]> = {
+const FILTER_FIELDS: Record<string, { filter_type: string; label: string; placeholder: string; required?: boolean }[]> = {
   'TST-001': [
-    { filter_type: 'PT', label: 'Product Code', placeholder: 'vd: APB648' },
-    { filter_type: 'LE', label: 'Legal Entity', placeholder: 'vd: APERO-SG' },
-    { filter_type: 'CTY', label: 'Country', placeholder: 'vd: IN, US, VN' },
-    { filter_type: 'TUT', label: 'Urgency', placeholder: 'NORMAL / URGENT' },
+    { filter_type: 'PT', label: 'Product Code *', placeholder: 'vd: APB648', required: true },
+    { filter_type: 'PT_NAME', label: 'Product Name *', placeholder: 'vd: Caller ID Spam Call', required: true },
+    { filter_type: 'CDT', label: 'Department (CDT)', placeholder: 'vd: HQ1, AST' },
   ],
   'TST-010': [
     { filter_type: 'PT', label: 'Product Code', placeholder: 'vd: APB648' },
@@ -49,6 +48,8 @@ export function CreateTaskPage() {
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
+  const [uploadFile, setUploadFile] = useState<File | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -56,12 +57,32 @@ export function CreateTaskPage() {
     setError(null)
     setSuccess(null)
     try {
+      // Validate required filters
+      const currentFilters = FILTER_FIELDS[tstId] || []
+      for (const f of currentFilters) {
+        if (f.required && !filterValues[f.filter_type]?.trim()) {
+          setError(`${f.label.replace(' *', '')} là bắt buộc`)
+          setSubmitting(false)
+          return
+        }
+      }
       const filters = Object.entries(filterValues)
         .filter(([, v]) => v.trim() !== '')
         .map(([filter_type, filter_code]) => ({ filter_type, filter_code: filter_code.trim() }))
       const payload = { tst_id: tstId, title, priority, due_date: dueDate || undefined, filters }
       const res = await api.post('/api/legal/task/', payload)
       const tsiId = res.data?.data?.tsi_id
+      // Upload file if selected
+      if (tsiId && uploadFile) {
+        try {
+          const formData = new FormData()
+          formData.append('file', uploadFile)
+          formData.append('tdt_id', 'TDT-001')
+          await api.post(`/api/legal/task/${tsiId}/upload-file`, formData, {
+            headers: { 'Content-Type': 'multipart/form-data' },
+          })
+        } catch { /* file upload is optional, don't block task creation */ }
+      }
       setSuccess('Task created: ' + tsiId)
       if (tsiId) setTimeout(() => navigate('/legal/tasks/' + tsiId), 1500)
     } catch (err: unknown) {
@@ -121,12 +142,22 @@ export function CreateTaskPage() {
                 <label className="block text-sm font-medium text-gray-700 mb-1">
                   {f.label} <span className="text-gray-400">({f.filter_type})</span>
                 </label>
-                <input type="text" className="w-full border rounded px-3 py-2"
+                <input type="text" className={`w-full border rounded px-3 py-2 ${f.required ? 'border-blue-300' : ''}`}
                   value={filterValues[f.filter_type] || ''}
                   onChange={(e) => setFilterValues(prev => ({...prev, [f.filter_type]: e.target.value}))}
-                  placeholder={f.placeholder} />
+                  placeholder={f.placeholder}
+                  required={f.required} />
               </div>
             ))}
+          </div>
+        )}
+
+        {tstId && (
+          <div className="mb-4 border-t pt-4">
+            <h3 className="text-sm font-semibold text-gray-600 mb-3">Upload tài liệu</h3>
+            <input ref={fileRef} type="file" accept=".pdf,.docx,.xlsx,.pptx,.png,.jpg,.csv" className="text-sm"
+              onChange={(e) => setUploadFile(e.target.files?.[0] || null)} />
+            {uploadFile && <p className="text-xs text-green-600 mt-1">✓ {uploadFile.name}</p>}
           </div>
         )}
 

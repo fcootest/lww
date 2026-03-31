@@ -1,0 +1,22 @@
+services:
+  frontend:
+    build:
+      context: ./legal-workflow-fe
+      dockerfile: Dockerfile
+    ports:
+      - "8083:8080"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ./legal-workflow-be
+      dockerfile: Dockerfile
+    ports:
+      - "8001:8001"
+    env_file:
+      - ./legal-workflow-be/.env
+    volumes:
+      - ./legal-workflow-be/uploads:/app/uploads
+    restart: unless-stopped
