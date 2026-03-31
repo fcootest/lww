@@ -140,18 +140,18 @@ async def upload_file(
 
 
 @router.get("/{tsi_id}/file/{filename}")
-async def serve_file(tsi_id: str, filename: str):
-    """Serve an uploaded file -- stream from GCS directly (no signed URL needed)."""
+async def serve_file(tsi_id: str, filename: str, dl: int = 0):
+    """Serve file from GCS (stream) or local. dl=1 forces download, default=inline (View)."""
     import mimetypes
+    from fastapi import Query
     from fastapi.responses import StreamingResponse
+    import io
 
-    # Determine content type from filename
     content_type, _ = mimetypes.guess_type(filename)
     content_type = content_type or "application/octet-stream"
-    # Force download disposition for office files
-    download_ext = {".pptx", ".docx", ".xlsx", ".pdf", ".csv"}
-    ext = os.path.splitext(filename)[1].lower()
-    disposition = "attachment" if ext in download_ext else "inline"
+    # View (dl=0): inline so PDF/images open in browser
+    # Download (dl=1): attachment so browser saves the file
+    disposition = "attachment" if dl else "inline"
 
     client = _get_gcs_client()
     if client:
@@ -159,9 +159,7 @@ async def serve_file(tsi_id: str, filename: str):
             bucket = client.bucket(GCS_BUCKET)
             blob = bucket.blob(f"{tsi_id}/{filename}")
             if blob.exists():
-                # Stream file content directly - no signed URL, no IAM signing required
                 file_bytes = blob.download_as_bytes()
-                import io
                 return StreamingResponse(
                     io.BytesIO(file_bytes),
                     media_type=content_type,

@@ -91,30 +91,32 @@ const EVENT_COLORS: Record<string, string> = {
 
 const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8100'
 
-function resolveFileUrl(url: string | undefined): string {
+function resolveFileUrl(url: string | undefined, forDownload = false): string {
   if (!url) return ''
+  const suffix = forDownload ? '?dl=1' : ''
   // GCS gs:// URIs are not browser-accessible; extract path and use API endpoint
   if (url.startsWith('gs://')) {
     const match = url.match(/^gs:\/\/[^/]+\/(.+)$/)
     if (match) {
-      // path is tsi_id/filename
       const parts = match[1].split('/')
       if (parts.length >= 2) {
         const tsiId = parts[0]
         const filename = parts.slice(1).join('/')
-        return API_BASE + `/api/legal/task/${tsiId}/file/${filename}`
+        return API_BASE + `/api/legal/task/${tsiId}/file/${filename}` + suffix
       }
     }
     return ''
   }
-  if (url.startsWith('http')) return url
-  if (url.startsWith('/api/')) return API_BASE + url
+  if (url.startsWith('http')) return url + suffix
+  if (url.startsWith('/api/')) return API_BASE + url + suffix
   return url
 }
 
 async function downloadFile(url: string, filename: string): Promise<void> {
+  // Append ?dl=1 if not already present to force attachment disposition
+  const dlUrl = url.includes('?dl=') ? url : url + '?dl=1'
   try {
-    const res = await fetch(url)
+    const res = await fetch(dlUrl)
     const blob = await res.blob()
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
@@ -741,7 +743,7 @@ export function TaskDetailPage() {
                     {doc.file_url && (
                       <>
                         <a href={resolveFileUrl(doc.file_url)} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline text-xs">View</a>
-                        <button onClick={() => downloadFile(resolveFileUrl(doc.file_url), doc.file_name)} className="text-green-600 hover:underline text-xs">Download</button>
+                        <button onClick={() => downloadFile(resolveFileUrl(doc.file_url, true), doc.file_name)} className="text-green-600 hover:underline text-xs">Download</button>
                       </>
                     )}
                     {!isAdmin && tsi?.status !== 'COMPLETED' && (
