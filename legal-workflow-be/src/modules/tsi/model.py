@@ -42,4 +42,5 @@ class TSI(BaseModel):
     current_tst_level: Optional[int] = None
     current_tst_id: Optional[str] = None
     created_at: datetime = Field(default_factory=datetime.utcnow)
+    metadata: Optional[str] = None  # JSON string for additional fields
     updated_at: datetime = Field(default_factory=datetime.utcnow)

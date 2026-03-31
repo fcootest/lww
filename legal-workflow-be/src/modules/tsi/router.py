@@ -215,6 +215,73 @@ async def get_task_detail(tsi_id: str, user: dict = Depends(get_current_user)):
     })
 
 
+@router.put("/{tsi_id}/reassign")
+async def reassign_task(tsi_id: str, req: dict, user: dict = Depends(get_current_user)):
+    """Reassign a task to a different employee."""
+    from src.modules.tsi.repository import tsi_repository
+    from src.modules.tsev.model import TSEV, TSEVEventType
+    from src.modules.tsev.repository import tsev_repository
+    from uuid import uuid4
+    import json
+
+    new_emp_code = req.get("new_emp_code")
+    reason = req.get("reason", "")
+    if not new_emp_code:
+        return send_error(message="new_emp_code is required", status_code=400)
+
+    tsi = tsi_repository.get_by_id(tsi_id)
+    if tsi is None:
+        return send_error(message=f"TSI '{tsi_id}' not found", status_code=404)
+
+    old_emp = tsi.assigned_to
+    tsi_repository.update(tsi_id, {"assigned_to": new_emp_code})
+
+    # Create REASSIGN event
+    tsev = TSEV(
+        tsev_id=f"TSEV-{uuid4().hex[:8]}",
+        tsi_id=tsi_id,
+        event_type=TSEVEventType.REASSIGN,
+        emp_id=user.get("emp_code", "SYSTEM"),
+        event_data=json.dumps({"old_emp": old_emp, "new_emp": new_emp_code, "reason": reason}),
+    )
+    tsev_repository.create(tsev)
+
+    return send_success(data={"tsi_id": tsi_id, "old_emp": old_emp, "new_emp": new_emp_code}, message="Task reassigned")
+
+
+@router.put("/{tsi_id}/metadata")
+async def update_metadata(tsi_id: str, metadata: dict, user: dict = Depends(get_current_user)):
+    """Update task metadata (LF240 additional fields)."""
+    from src.modules.tsi.repository import tsi_repository
+    import json
+
+    tsi = tsi_repository.get_by_id(tsi_id)
+    if tsi is None:
+        return send_error(message=f"TSI '{tsi_id}' not found", status_code=404)
+
+    tsi_repository.update(tsi_id, {"metadata": json.dumps(metadata)})
+    return send_success(data=metadata, message="Metadata updated")
+
+
+@router.get("/{tsi_id}/metadata")
+async def get_metadata(tsi_id: str, user: dict = Depends(get_current_user)):
+    """Get task metadata."""
+    from src.modules.tsi.repository import tsi_repository
+    import json
+
+    tsi = tsi_repository.get_by_id(tsi_id)
+    if tsi is None:
+        return send_error(message=f"TSI '{tsi_id}' not found", status_code=404)
+
+    metadata = {}
+    if hasattr(tsi, 'metadata') and tsi.metadata:
+        try:
+            metadata = json.loads(tsi.metadata)
+        except (json.JSONDecodeError, TypeError):
+            pass
+    return send_success(data=metadata)
+
+
 def _collect_tree_tsi_ids(tsi, tsi_repository) -> list[str]:
     """Collect all TSI IDs in the tree (root L1 + all L2 + all L3)."""
     all_tsis = tsi_repository.get_all()

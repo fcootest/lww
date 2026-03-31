@@ -1,9 +1,9 @@
-"""TDI router -- document upload APIs with real file storage."""
+"""TDI router -- document upload APIs with GCS & local storage."""
 
 import os
 from uuid import uuid4
 from fastapi import APIRouter, Depends, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse
 from src.auth.dependencies import get_current_user
 from src.common.response import send_success, send_error
 from src.modules.tdi.model import TDI
@@ -15,6 +15,35 @@ from src.modules.tsev.repository import tsev_repository
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "..", "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+GCS_BUCKET = os.environ.get("GCS_BUCKET", "legal-workflow-docs")
+STORAGE_BACKEND = os.environ.get("STORAGE_BACKEND", "gcs")  # "gcs" or "local"
+
+
+def _get_gcs_client():
+    """Get GCS client, returns None if not available."""
+    try:
+        from google.cloud import storage
+        return storage.Client()
+    except Exception:
+        return None
+
+
+def _upload_to_gcs(tsi_id: str, content: bytes, stored_name: str) -> str:
+    """Upload file to GCS. Returns gs:// URI or empty string on failure."""
+    client = _get_gcs_client()
+    if not client:
+        return ""
+    try:
+        bucket = client.bucket(GCS_BUCKET)
+        blob_name = f"{tsi_id}/{stored_name}"
+        blob = bucket.blob(blob_name)
+        blob.upload_from_string(content)
+        return f"gs://{GCS_BUCKET}/{blob_name}"
+    except Exception as e:
+        print(f"[GCS] Upload failed: {e}")
+        return ""
+
 
 router = APIRouter(
     prefix="/api/legal/task",
@@ -34,23 +63,15 @@ async def upload_document(tsi_id: str, req: TDICreateRequest, user: dict = Depen
 
     tdi_id = f"TDI-{uuid4().hex[:8]}"
     tdi = TDI(
-        tdi_id=tdi_id,
-        tdt_id=req.tdt_id,
-        tsi_id=tsi_id,
-        file_name=req.file_name,
-        file_url=req.file_url,
-        version=version,
-        uploaded_by=user.get("emp_code", "SYSTEM"),
-        notes=req.notes,
+        tdi_id=tdi_id, tdt_id=req.tdt_id, tsi_id=tsi_id,
+        file_name=req.file_name, file_url=req.file_url,
+        version=version, uploaded_by=user.get("emp_code", "SYSTEM"), notes=req.notes,
     )
     tdi_repository.create(tdi)
 
     tsev = TSEV(
-        tsev_id=f"TSEV-{uuid4().hex[:8]}",
-        tsi_id=tsi_id,
-        event_type=TSEVEventType.UPLOAD,
-        emp_id=user.get("emp_code", "SYSTEM"),
-        tdi_id=tdi_id,
+        tsev_id=f"TSEV-{uuid4().hex[:8]}", tsi_id=tsi_id,
+        event_type=TSEVEventType.UPLOAD, emp_id=user.get("emp_code", "SYSTEM"), tdi_id=tdi_id,
     )
     tsev_repository.create(tsev)
 
@@ -64,62 +85,79 @@ async def upload_file(
     tdt_id: str = Form(default="TDT-001"),
     user: dict = Depends(get_current_user),
 ):
-    """Upload a real file to server storage."""
+    """Upload a real file to GCS (primary) or local storage (fallback)."""
     tsi = tsi_repository.get_by_id(tsi_id)
     if tsi is None:
         return send_error(message=f"TSI '{tsi_id}' not found", status_code=404)
 
-    # Save file to uploads/{tsi_id}/
-    task_dir = os.path.join(UPLOAD_DIR, tsi_id)
-    os.makedirs(task_dir, exist_ok=True)
-
-    # Unique filename to avoid collisions
     ext = os.path.splitext(file.filename or "file")[1]
     stored_name = f"{uuid4().hex[:8]}{ext}"
-    file_path = os.path.join(task_dir, stored_name)
-
     content = await file.read()
-    with open(file_path, "wb") as f:
-        f.write(content)
+    storage_type = "LOCAL"
+    file_url = ""
+
+    # Try GCS first
+    if STORAGE_BACKEND == "gcs":
+        gcs_uri = _upload_to_gcs(tsi_id, content, stored_name)
+        if gcs_uri:
+            file_url = gcs_uri
+            storage_type = "GCS"
+
+    # Fallback to local
+    if not file_url:
+        task_dir = os.path.join(UPLOAD_DIR, tsi_id)
+        os.makedirs(task_dir, exist_ok=True)
+        file_path = os.path.join(task_dir, stored_name)
+        with open(file_path, "wb") as f:
+            f.write(content)
+        file_url = f"/api/legal/task/{tsi_id}/file/{stored_name}"
+        storage_type = "LOCAL"
 
     # Create TDI record
     current_max = tdi_repository.get_max_version(tsi_id, tdt_id)
     version = current_max + 1
-
     tdi_id_val = f"TDI-{uuid4().hex[:8]}"
-    file_url = f"/api/legal/task/{tsi_id}/file/{stored_name}"
 
     tdi = TDI(
-        tdi_id=tdi_id_val,
-        tdt_id=tdt_id,
-        tsi_id=tsi_id,
-        file_name=file.filename or "unknown",
-        file_url=file_url,
-        file_size_bytes=len(content),
-        version=version,
+        tdi_id=tdi_id_val, tdt_id=tdt_id, tsi_id=tsi_id,
+        file_name=file.filename or "unknown", file_url=file_url,
+        file_size_bytes=len(content), version=version,
         uploaded_by=user.get("emp_code", "SYSTEM"),
     )
     tdi_repository.create(tdi)
 
     tsev = TSEV(
-        tsev_id=f"TSEV-{uuid4().hex[:8]}",
-        tsi_id=tsi_id,
-        event_type=TSEVEventType.UPLOAD,
-        emp_id=user.get("emp_code", "SYSTEM"),
-        tdi_id=tdi_id_val,
+        tsev_id=f"TSEV-{uuid4().hex[:8]}", tsi_id=tsi_id,
+        event_type=TSEVEventType.UPLOAD, emp_id=user.get("emp_code", "SYSTEM"), tdi_id=tdi_id_val,
     )
     tsev_repository.create(tsev)
 
-    return send_success(data=tdi.model_dump(mode="json"), message="File uploaded", status_code=201)
+    return send_success(
+        data={**tdi.model_dump(mode="json"), "storage_type": storage_type},
+        message=f"File uploaded to {storage_type}", status_code=201,
+    )
 
 
 @router.get("/{tsi_id}/file/{filename}")
 async def serve_file(tsi_id: str, filename: str):
-    """Serve an uploaded file."""
+    """Serve an uploaded file -- check GCS first, then local."""
+    client = _get_gcs_client()
+    if client:
+        try:
+            bucket = client.bucket(GCS_BUCKET)
+            blob = bucket.blob(f"{tsi_id}/{filename}")
+            if blob.exists():
+                from datetime import timedelta
+                signed_url = blob.generate_signed_url(expiration=timedelta(minutes=60))
+                return RedirectResponse(url=signed_url)
+        except Exception:
+            pass
+
+    # Fallback to local
     file_path = os.path.join(UPLOAD_DIR, tsi_id, filename)
-    if not os.path.exists(file_path):
-        return send_error(message="File not found", status_code=404)
-    return FileResponse(file_path)
+    if os.path.exists(file_path):
+        return FileResponse(file_path)
+    return send_error(message="File not found", status_code=404)
 
 
 @router.get("/{tsi_id}/documents")

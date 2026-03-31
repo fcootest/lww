@@ -155,6 +155,10 @@ export function TaskDetailPage() {
   const [aiCheckResult, setAiCheckResult] = useState<AIReviewResult | null>(null)
   const [aiChecking, setAiChecking] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const [lf240Meta, setLf240Meta] = useState<Record<string, string>>({})
+  const [savingMeta, setSavingMeta] = useState(false)
+  const [assignableEmps, setAssignableEmps] = useState<{emp_code: string; emp_name: string}[]>([])
+  const [reassigning, setReassigning] = useState(false)
 
   const fetchTask = useCallback(async () => {
     if (!id) return
@@ -178,6 +182,22 @@ export function TaskDetailPage() {
         }
       }
       setTask(data)
+      // Load metadata for LF240
+      try {
+        const metaRes = await api.get(`/api/legal/task/${data.tsi?.tsi_id || id}/metadata`)
+        const metaData = metaRes.data?.data
+        if (metaData && typeof metaData === 'object') {
+          setLf240Meta(metaData)
+        }
+      } catch { /* metadata might not exist yet */ }
+      // Load assignable employees for reassignment
+      try {
+        const empRes = await api.get('/api/legal/emp/')
+        const empData = empRes.data?.data || empRes.data
+        if (Array.isArray(empData)) {
+          setAssignableEmps(empData.map((e: any) => ({ emp_code: e.emp_code, emp_name: e.emp_name })))
+        }
+      } catch { /* emp list might not be available */ }
     } catch (err: unknown) {
       if (err && typeof err === 'object' && 'response' in err) {
         const axErr = err as { response?: { data?: { detail?: string }; status?: number } }
@@ -199,6 +219,8 @@ export function TaskDetailPage() {
   const filters = task?.filters || []
   const activeL3 = findActiveL3(progress)
   const hasDocuments = documents.length > 0
+  const isLF240 = progress.some(l1 => l1.tst_id?.startsWith('TST-034') || l1.tst_name?.toLowerCase().includes('contract'))
+  const isInProgress = tsi?.status === 'IN_PROGRESS'
 
   const handleInlineAction = async (node: ProgressNode) => {
     const state = reviewState[node.tsi_id]
@@ -363,6 +385,37 @@ export function TaskDetailPage() {
     } finally { setAiReviewingId(null) }
   }
 
+  const handleSaveMeta = async () => {
+    if (!id) return
+    setSavingMeta(true)
+    setActionMsg(null)
+    try {
+      await api.put(`/api/legal/task/${id}/metadata`, lf240Meta)
+      setActionMsg('Thông tin bổ sung đã lưu')
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axErr = err as { response?: { data?: { message?: string } } }
+        setActionMsg('Error: ' + (axErr.response?.data?.message || 'Save failed'))
+      } else { setActionMsg('Error: Save failed') }
+    } finally { setSavingMeta(false) }
+  }
+
+  const handleReassign = async (newEmpCode: string) => {
+    if (!id || !newEmpCode) return
+    setReassigning(true)
+    setActionMsg(null)
+    try {
+      await api.put(`/api/legal/task/${id}/reassign`, { new_emp_code: newEmpCode })
+      setActionMsg('Task đã được chuyển giao')
+      await fetchTask()
+    } catch (err: unknown) {
+      if (err && typeof err === 'object' && 'response' in err) {
+        const axErr = err as { response?: { data?: { message?: string } } }
+        setActionMsg('Error: ' + (axErr.response?.data?.message || 'Reassign failed'))
+      } else { setActionMsg('Error: Reassign failed') }
+    } finally { setReassigning(false) }
+  }
+
   if (loading) return <div data-testid="loading-state" className="text-gray-500 p-8">Loading task...</div>
 
   if (error || !task) return (
@@ -408,7 +461,21 @@ export function TaskDetailPage() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
           <div><span className="text-gray-500">Priority:</span> <span className="font-medium">{tsi?.priority || '-'}</span></div>
           <div><span className="text-gray-500">Due Date:</span> <span className="font-medium">{tsi?.due_date || '-'}</span></div>
-          <div><span className="text-gray-500">Assigned To:</span> <span className="font-medium">{tsi?.assigned_to || '-'}</span></div>
+          <div>
+            <span className="text-gray-500">Assigned To:</span>{' '}
+            {isAdmin && assignableEmps.length > 0 ? (
+              <select className="border rounded px-2 py-1 text-sm font-medium" value={tsi?.assigned_to || ''}
+                onChange={(e) => handleReassign(e.target.value)} disabled={reassigning}>
+                <option value="">-- Select --</option>
+                {assignableEmps.map(emp => (
+                  <option key={emp.emp_code} value={emp.emp_code}>{emp.emp_name} ({emp.emp_code})</option>
+                ))}
+              </select>
+            ) : (
+              <span className="font-medium">{tsi?.assigned_to || '-'}</span>
+            )}
+            {reassigning && <span className="text-xs text-gray-400 ml-2">Đang chuyển...</span>}
+          </div>
           <div><span className="text-gray-500">Created At:</span> <span className="font-medium">{tsi?.created_at ? new Date(tsi.created_at).toLocaleDateString() : '-'}</span></div>
         </div>
         {filters.length > 0 && (
@@ -546,6 +613,54 @@ export function TaskDetailPage() {
         ))}
       </div>
 
+      {/* 5.5 LF240 Additional Fields */}
+      {isLF240 && isInProgress && (
+        <div data-testid="lf240-fields" className="bg-white rounded-lg shadow p-6">
+          <h3 className="text-lg font-semibold mb-4">Thông tin bổ sung — Hợp đồng đối tác</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">SĐT người đề xuất <span className="text-red-500">*</span></label>
+              <input type="tel" className="w-full border rounded px-3 py-2 text-sm" placeholder="+84-xxx-xxx-xxx"
+                value={lf240Meta.requester_phone || ''} onChange={(e) => setLf240Meta(prev => ({...prev, requester_phone: e.target.value}))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Email quản lý người đề xuất <span className="text-red-500">*</span></label>
+              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="manager@apero.vn"
+                value={lf240Meta.manager_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, manager_email: e.target.value}))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">SĐT đối tác</label>
+              <input type="tel" className="w-full border rounded px-3 py-2 text-sm" placeholder="+84-xxx-xxx-xxx"
+                value={lf240Meta.partner_phone || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_phone: e.target.value}))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mail liên hệ đối tác <span className="text-red-500">*</span></label>
+              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="contact@partner.com"
+                value={lf240Meta.partner_contact_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_contact_email: e.target.value}))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mail ký hợp đồng đối tác</label>
+              <input type="email" className="w-full border rounded px-3 py-2 text-sm" placeholder="contract@partner.com"
+                value={lf240Meta.partner_contract_email || ''} onChange={(e) => setLf240Meta(prev => ({...prev, partner_contract_email: e.target.value}))} />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mã PE <span className="text-red-500">*</span></label>
+              <input type="text" className="w-full border rounded px-3 py-2 text-sm" placeholder="PE-2026-001"
+                value={lf240Meta.pe_code || ''} onChange={(e) => setLf240Meta(prev => ({...prev, pe_code: e.target.value}))} />
+            </div>
+            <div className="md:col-span-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Mục đích ký kết / ban hành <span className="text-red-500">*</span></label>
+              <textarea className="w-full border rounded px-3 py-2 text-sm" rows={3} placeholder="Mô tả mục đích ký kết hợp đồng..."
+                value={lf240Meta.purpose || ''} onChange={(e) => setLf240Meta(prev => ({...prev, purpose: e.target.value}))} />
+            </div>
+          </div>
+          <button className="mt-4 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 text-sm font-medium disabled:opacity-50"
+            disabled={savingMeta} onClick={handleSaveMeta}>
+            {savingMeta ? 'Đang lưu...' : 'Lưu thông tin bổ sung'}
+          </button>
+        </div>
+      )}
+
       {/* 6. Documents Table */}
       <div data-testid="documents-section" className="bg-white rounded-lg shadow p-6">
         <h3 className="text-lg font-semibold mb-4">Documents ({documents.length})</h3>
@@ -583,27 +698,6 @@ export function TaskDetailPage() {
             </tbody>
           </table>
         ) : <p className="text-gray-400 text-sm">No documents uploaded yet.</p>}
-      </div>
-
-      {/* 7. Event Log (collapsible) */}
-      <div data-testid="event-log-section" className="bg-white rounded-lg shadow p-6">
-        <button className="text-lg font-semibold flex items-center gap-2" onClick={() => setShowEventLog(!showEventLog)}>
-          Event Log ({events.length}) <span className="text-sm">{showEventLog ? '▲' : '▼'}</span>
-        </button>
-        {showEventLog && (
-          <div className="mt-4 space-y-3">
-            {events.length > 0 ? events.map((ev, i) => (
-              <div key={ev.id || i} className="flex items-start gap-3 border-l-4 border-gray-200 pl-3 py-1">
-                <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${EVENT_COLORS[ev.event_type || ''] || 'bg-gray-100 text-gray-800'}`}>{ev.event_type}</span>
-                <div className="text-xs text-gray-600 flex-1">
-                  <span className="font-medium">{ev.emp_id || 'SYSTEM'}</span>
-                  {ev.event_data && <span className="ml-2 text-gray-500">{ev.event_data.length > 100 ? ev.event_data.slice(0, 100) + '...' : ev.event_data}</span>}
-                </div>
-                <span className="text-xs text-gray-400 whitespace-nowrap">{ev.created_at ? new Date(ev.created_at).toLocaleString() : '-'}</span>
-              </div>
-            )) : <p className="text-gray-400 text-sm">No events recorded.</p>}
-          </div>
-        )}
       </div>
 
       {/* 8. User Actions */}
@@ -724,6 +818,27 @@ export function TaskDetailPage() {
           </div>
         </div>
       )}
+
+      {/* 7. Event Log (collapsible) — moved to bottom */}
+      <div data-testid="event-log-section" className="bg-white rounded-lg shadow p-6">
+        <button className="text-lg font-semibold flex items-center gap-2" onClick={() => setShowEventLog(!showEventLog)}>
+          Event Log ({events.length}) <span className="text-sm">{showEventLog ? '▲' : '▼'}</span>
+        </button>
+        {showEventLog && (
+          <div className="mt-4 space-y-3">
+            {events.length > 0 ? events.map((ev, i) => (
+              <div key={ev.id || i} className="flex items-start gap-3 border-l-4 border-gray-200 pl-3 py-1">
+                <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${EVENT_COLORS[ev.event_type || ''] || 'bg-gray-100 text-gray-800'}`}>{ev.event_type}</span>
+                <div className="text-xs text-gray-600 flex-1">
+                  <span className="font-medium">{ev.emp_id || 'SYSTEM'}</span>
+                  {ev.event_data && <span className="ml-2 text-gray-500">{ev.event_data.length > 100 ? ev.event_data.slice(0, 100) + '...' : ev.event_data}</span>}
+                </div>
+                <span className="text-xs text-gray-400 whitespace-nowrap">{ev.created_at ? new Date(ev.created_at).toLocaleString() : '-'}</span>
+              </div>
+            )) : <p className="text-gray-400 text-sm">No events recorded.</p>}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

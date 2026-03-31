@@ -27,7 +27,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
 
     # CORS
-    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:3000"]
+    CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://localhost:5174", "http://localhost:5175", "http://localhost:5176", "http://localhost:3000", "https://lww-frontend-21672960606.asia-southeast1.run.app", "https://lww.mikai.tech"]
 
     class Config:
         env_file = ".env"
